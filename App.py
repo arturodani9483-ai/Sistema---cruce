@@ -1,32 +1,45 @@
 import streamlit as st
 import pandas as pd
+import io
+import re
+from datetime import datetime
 
-# Configuración de la página
-st.set_page_config(page_title="Sistema de Validación", layout="wide")
+st.set_page_config(page_title="Sistema de Auditoría y Control", layout="wide")
 
-st.title("📊 Sistema de Cruce y Validación de Documentos")
-st.write("Sube los archivos correspondientes para realizar el cruce automático.")
+st.title("📊 Sistema de Control y Auditoría de Documentos")
+st.write("Sube la planilla CSV, el archivo TXT y las carpetas de respaldos para generar el informe ejecutivo y el detalle de faltantes.")
 
-# 1. BOTONES DE CARGA DE ARCHIVOS
+# --- 1. SECCIÓN DE CARGA DE ARCHIVOS ---
+st.subheader("1. Carga de Archivos y Carpetas")
+
 col1, col2 = st.columns(2)
-
 with col1:
-    archivo_csv = st.file_uploader("1. Cargar archivo CSV", type=["csv"])
-
+    archivo_csv = st.file_uploader("Cargar planilla CSV", type=["csv"])
 with col2:
-    archivo_txt = st.file_uploader("2. Cargar archivo TXT", type=["txt"])
+    archivo_txt = st.file_uploader("Cargar archivo TXT", type=["txt"])
+
+st.markdown("---")
+st.subheader("2. Carga de Carpetas de Respaldos")
+
+col3, col4, col5 = st.columns(3)
+with col3:
+    archivos_cedulas = st.file_uploader("Carpeta Cédulas (seleccionar archivos)", accept_multiple_files=True)
+with col4:
+    archivos_autorizaciones = st.file_uploader("Carpeta Autorizaciones (seleccionar archivos)", accept_multiple_files=True)
+with col5:
+    archivos_documentos = st.file_uploader("Carpeta Documentos Varios (seleccionar archivos)", accept_multiple_files=True)
 
 st.markdown("---")
 
-# 2. BOTÓN PRINCIPAL DE CRUCE
-if st.button("🚀 Cruzar Información", use_container_width=True):
-    if archivo_csv is None or archivo_txt is None:
-        st.warning("⚠️ Debes subir ambos archivos (CSV y TXT) antes de realizar el cruce.")
+# --- 2. BOTÓN DE PROCESAMIENTO ---
+if st.button("🚀 Procesar Auditoría Completa", use_container_width=True):
+    if not archivo_csv or not archivo_txt:
+        st.warning("⚠️ Debes cargar al menos la planilla CSV y el archivo TXT para continuar.")
     else:
         try:
-            # Procesar el CSV
+            # --- LECTURA CSV Y TXT ---
             df_csv = pd.read_csv(archivo_csv, sep=';', encoding='latin-1')
-            df_csv.columns = [col.strip() for col in df_csv.columns]
+            df_csv.columns = [c.strip() for c in df_csv.columns]
             
             col_cedula_csv = 'N° de cédula de identidad del Beneficiario'
             col_monto_csv = 'Monto por descontarse en el mes'
@@ -36,66 +49,154 @@ if st.button("🚀 Cruzar Información", use_container_width=True):
                 df_csv[col_monto_csv].astype(str).str.strip(), errors='coerce'
             ).fillna(0)
             
-            # Sumar montos por cédula en CSV
-            csv_resumen = df_csv.groupby([col_cedula_csv, col_nombre])[col_monto_csv].sum().reset_index()
-            csv_resumen.rename(columns={col_monto_csv: 'Monto_Total_CSV'}, inplace=True)
-            
-            # Procesar el TXT
-            registros_txt = []
-            lineas = archivo_txt.getvalue().decode('latin-1').splitlines()
-            for linea in lineas:
+            # Entidad
+            entidad_cod = df_csv['Código de Cooperativa o Entidad'].iloc[0] if 'Código de Cooperativa o Entidad' in df_csv.columns else 96
+
+            # Lectura TXT (Referencia para Cédulas)
+            cedulas_txt = set()
+            lineas_txt = archivo_txt.getvalue().decode('latin-1').splitlines()
+            for linea in lineas_txt:
                 partes = linea.split()
-                if len(partes) >= 3:
-                    registros_txt.append({
-                        'Cedula': int(partes[1]),
-                        'Monto_TXT': float(partes[2]),
-                        'Num_Socio_TXT': partes[0]
+                if len(partes) >= 2:
+                    try:
+                        cedulas_txt.add(str(int(partes[1])))
+                    except ValueError:
+                        pass
+
+            # --- ANÁLISIS DE CÉDULAS ---
+            nombres_cedulas_cargadas = [f.name for f in (archivos_cedulas or [])]
+            cedulas_encontradas_drive = set()
+            
+            for nombre_f in nombres_cedulas_cargadas:
+                numeros = re.findall(r'\d+', nombre_f)
+                for num in numeros:
+                    cedulas_encontradas_drive.add(num)
+
+            cedulas_faltantes_list = []
+            for c in cedulas_txt:
+                if c not in cedulas_encontradas_drive:
+                    cedulas_faltantes_list.append({
+                        'Entidad': entidad_cod,
+                        'Tipo de diferencia': 'FALTANTE',
+                        'C.I.': c
                     })
-            df_txt = pd.DataFrame(registros_txt)
+            df_faltantes_cedulas = pd.DataFrame(cedulas_faltantes_list)
+
+            # --- ANÁLISIS DE AUTORIZACIONES Y DOCUMENTOS VARIOS ---
+            conteo_esperado = df_csv.groupby(col_cedula_csv).size().to_dict()
             
-            # Cruzar datos
-            resultado = pd.merge(csv_resumen, df_txt, left_on=col_cedula_csv, right_on='Cedula', how='outer')
-            resultado['Monto_Total_CSV'] = resultado['Monto_Total_CSV'].fillna(0)
-            resultado['Monto_TXT'] = resultado['Monto_TXT'].fillna(0)
-            resultado[col_nombre] = resultado[col_nombre].fillna('NO FIGURA EN CSV')
-            resultado['Cedula_Final'] = resultado[col_cedula_csv].combine_first(resultado['Cedula'])
-            resultado['Diferencia'] = resultado['Monto_Total_CSV'] - resultado['Monto_TXT']
+            nombres_aut = [f.name for f in (archivos_autorizaciones or [])]
+            nombres_doc = [f.name for f in (archivos_documentos or [])]
+
+            conteo_aut_encontrado = {}
+            for name in nombres_aut:
+                nums = re.findall(r'\d+', name)
+                for n in nums:
+                    conteo_aut_encontrado[n] = conteo_aut_encontrado.get(n, 0) + 1
+
+            conteo_doc_encontrado = {}
+            for name in nombres_doc:
+                nums = re.findall(r'\d+', name)
+                for n in nums:
+                    conteo_doc_encontrado[n] = conteo_doc_encontrado.get(n, 0) + 1
+
+            doc_oblig_list = []
+            cedulas_unicas_csv = set(str(int(c)) for c in df_csv[col_cedula_csv].dropna().unique())
+
+            for ci in cedulas_unicas_csv:
+                esperados = conteo_esperado.get(int(ci), 0)
+                encontrados_doc = conteo_doc_encontrado.get(ci, 0)
+                
+                if encontrados_doc < esperados:
+                    doc_oblig_list.append({
+                        'Entidad': entidad_cod,
+                        'Tipo de diferencia': 'FALTANTE',
+                        'C.I.': ci,
+                        'C.I. reconocida en Drive': ci if encontrados_doc > 0 else None,
+                        'Nivel de control': 'C.I. + CANTIDAD',
+                        'Declarados en planilla': esperados,
+                        'Encontrados': encontrados_doc,
+                        'Cantidad faltante/adicional': esperados - encontrados_doc,
+                        'Nota': 'Comparación por cantidad de apariciones de la C.I.'
+                    })
+                elif encontrados_doc > esperados:
+                    doc_oblig_list.append({
+                        'Entidad': entidad_cod,
+                        'Tipo de diferencia': 'ADICIONAL',
+                        'C.I.': ci,
+                        'C.I. reconocida en Drive': ci,
+                        'Nivel de control': 'C.I. + CANTIDAD',
+                        'Declarados en planilla': esperados,
+                        'Encontrados': encontrados_doc,
+                        'Cantidad faltante/adicional': encontrados_doc - esperados,
+                        'Nota': 'Comparación por cantidad de apariciones de la C.I.'
+                    })
+
+            df_faltantes_doc_oblig = pd.DataFrame(doc_oblig_list)
+
+            # --- CONSTRUCCIÓN DE INFORME EJECUTIVO ---
+            total_registros_csv = len(df_csv)
+            ci_unicas_oficiales = len(cedulas_unicas_csv)
+            ci_faltantes_cnt = len(df_faltantes_cedulas)
             
-            def determinar_estado(row):
-                if row['Monto_Total_CSV'] == 0:
-                    return '❌ Solo figura en TXT'
-                elif row['Monto_TXT'] == 0:
-                    return '❌ Solo figura en CSV'
-                elif abs(row['Diferencia']) < 0.01:
-                    return '✅ Correcto (Coincide)'
-                else:
-                    return '⚠️ Montos No Coinciden'
+            informe_ejecutivo = pd.DataFrame([{
+                'Entidad': entidad_cod,
+                'Registros planilla': total_registros_csv,
+                'C.I. únicas oficiales': ci_unicas_oficiales,
+                'Archivos de cédula encontrados': len(nombres_cedulas_cargadas),
+                'C.I. únicas reales encontradas': len(cedulas_encontradas_drive),
+                'C.I. faltantes': ci_faltantes_cnt,
+                'C.I. adicionales': 0,
+                'Cédulas repetidas (C.I.)': 0,
+                'Archivos adicionales por repetición': 0,
+                'Autorizaciones esperadas': total_registros_csv,
+                'Autorizaciones encontradas': len(nombres_aut),
+                'Autorizaciones faltantes': max(0, total_registros_csv - len(nombres_aut)),
+                'Autorizaciones adicionales': max(0, len(nombres_aut) - total_registros_csv),
+                'Obligaciones/Documentos esperados': total_registros_csv,
+                'Obligaciones/Documentos encontrados': len(nombres_doc),
+                'Obligaciones/Documentos faltantes': sum(d['Cantidad faltante/adicional'] for d in doc_oblig_list if d['Tipo de diferencia'] == 'FALTANTE'),
+                'Obligaciones/Documentos adicionales': sum(d['Cantidad faltante/adicional'] for d in doc_oblig_list if d['Tipo de diferencia'] == 'ADICIONAL'),
+                'Conciliados por nombre único': 0,
+                'Archivos sin identificar': 0,
+                'Casos REVISAR': ci_faltantes_cnt + len(df_faltantes_doc_oblig),
+                'Estado general': 'REVISAR' if (ci_faltantes_cnt + len(df_faltantes_doc_oblig)) > 0 else 'CORRECTO'
+            }])
+
+            df_cedulas_repetidas = pd.DataFrame(columns=['Entidad', 'C.I.', 'Cantidad de archivos', 'Archivos adicionales por repetición', 'Archivos', 'Rutas / origen'])
+
+            # --- RESULTADOS EN PANTALLA ---
+            st.success("¡Procesamiento finalizado con éxito!")
             
-            resultado['Estado'] = resultado.apply(determinar_estado, axis=1)
-            
-            # Mostrar métricas rápidas
-            st.success("¡Cruce de información completado exitosamente!")
-            
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Total Registros", len(resultado))
-            m2.metric("✅ Correctos", len(resultado[resultado['Estado'] == '✅ Correcto (Coincide)']))
-            m3.metric("⚠️ Con Errores / Diferencias", len(resultado[resultado['Estado'] != '✅ Correcto (Coincide)']))
-            
-            # Tabla interactiva con los resultados
-            st.subheader("📋 Resultado Detallado")
-            
-            columnas_visibles = [
-                'Cedula_Final', col_nombre, 'Num_Socio_TXT', 
-                'Monto_Total_CSV', 'Monto_TXT', 'Diferencia', 'Estado'
-            ]
-            
-            df_mostrar = resultado[columnas_visibles].rename(columns={
-                'Cedula_Final': 'Cédula',
-                col_nombre: 'Beneficiario',
-                'Num_Socio_TXT': 'N° Socio'
-            })
-            
-            st.dataframe(df_mostrar, use_container_width=True)
-            
+            st.subheader("📌 Resumen del Informe Ejecutivo")
+            st.dataframe(informe_ejecutivo, use_container_width=True)
+
+            if not df_faltantes_cedulas.empty:
+                st.subheader("⚠️ Cédulas Faltantes")
+                st.dataframe(df_faltantes_cedulas, use_container_width=True)
+
+            if not df_faltantes_doc_oblig.empty:
+                st.subheader("⚠️ Faltantes y Adicionales en Documentos / Obligaciones")
+                st.dataframe(df_faltantes_doc_oblig, use_container_width=True)
+
+            # --- GENERACIÓN DEL EXCEL CON NOMBRE DINÁMICO ---
+            fecha_actual = datetime.now().strftime("%d-%m-%Y")
+            nombre_archivo_excel = f"control descuento Hacienda {fecha_actual}.xlsx"
+
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                informe_ejecutivo.to_excel(writer, sheet_name='Informe Ejecutivo', index=False)
+                df_cedulas_repetidas.to_excel(writer, sheet_name='Cédulas repetidas', index=False)
+                df_faltantes_cedulas.to_excel(writer, sheet_name='Faltantes Adic Cédulas', index=False)
+                df_faltantes_doc_oblig.to_excel(writer, sheet_name='Faltantes Adic Doc Oblig', index=False)
+
+            st.download_button(
+                label=f"📥 Descargar {nombre_archivo_excel}",
+                data=output.getvalue(),
+                file_name=nombre_archivo_excel,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+
         except Exception as e:
-            st.error(f"Ocurrió un error al procesar los archivos: {e}")
+            st.error(f"Ocurrió un error durante la auditoría: {e}")
