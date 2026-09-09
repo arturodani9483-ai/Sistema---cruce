@@ -7,10 +7,10 @@ from datetime import datetime
 st.set_page_config(page_title="Sistema de Auditoría y Control", layout="wide")
 
 st.title("📊 Sistema de Control y Auditoría de Documentos")
-st.write("Sube la planilla CSV, el archivo TXT y las carpetas de respaldos para generar el informe ejecutivo y el detalle de faltantes.")
+st.write("Sube la planilla CSV, el archivo TXT y selecciona los archivos de las carpetas de respaldos.")
 
 # --- 1. SECCIÓN DE CARGA DE ARCHIVOS ---
-st.subheader("1. Carga de Archivos y Carpetas")
+st.subheader("1. Carga de Planilla y TXT")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -19,22 +19,34 @@ with col2:
     archivo_txt = st.file_uploader("Cargar archivo TXT", type=["txt"])
 
 st.markdown("---")
-st.subheader("2. Carga de Carpetas de Respaldos")
+st.subheader("2. Carga de Respaldos (Seleccionar todos los archivos con Ctrl+A)")
 
 col3, col4, col5 = st.columns(3)
 with col3:
-    archivos_cedulas = st.file_uploader("Carpeta Cédulas (seleccionar archivos)", accept_multiple_files=True)
+    archivos_cedulas = st.file_uploader(
+        "Archivos de Cédulas", 
+        accept_multiple_files=True,
+        help="Entrá a la carpeta de cédulas, presioná Ctrl+A y subilos todos."
+    )
 with col4:
-    archivos_autorizaciones = st.file_uploader("Carpeta Autorizaciones (seleccionar archivos)", accept_multiple_files=True)
+    archivos_autorizaciones = st.file_uploader(
+        "Archivos de Autorizaciones", 
+        accept_multiple_files=True,
+        help="Entrá a la carpeta de autorizaciones, presioná Ctrl+A y subilos todos."
+    )
 with col5:
-    archivos_documentos = st.file_uploader("Carpeta Documentos Varios (seleccionar archivos)", accept_multiple_files=True)
+    archivos_documentos = st.file_uploader(
+        "Archivos de Documentos Varios", 
+        accept_multiple_files=True,
+        help="Entrá a la carpeta de documentos, presioná Ctrl+A y subilos todos."
+    )
 
 st.markdown("---")
 
 # --- 2. BOTÓN DE PROCESAMIENTO ---
 if st.button("🚀 Procesar Auditoría Completa", use_container_width=True):
     if not archivo_csv or not archivo_txt:
-        st.warning("⚠️ Debes cargar al menos la planilla CSV y el archivo TXT para continuar.")
+        st.warning("⚠️ Debes cargar la planilla CSV y el archivo TXT para realizar la validación.")
     else:
         try:
             # --- LECTURA CSV Y TXT ---
@@ -43,13 +55,11 @@ if st.button("🚀 Procesar Auditoría Completa", use_container_width=True):
             
             col_cedula_csv = 'N° de cédula de identidad del Beneficiario'
             col_monto_csv = 'Monto por descontarse en el mes'
-            col_nombre = 'Nombres y Apellidos del Beneficiario'
             
             df_csv[col_monto_csv] = pd.to_numeric(
                 df_csv[col_monto_csv].astype(str).str.strip(), errors='coerce'
             ).fillna(0)
             
-            # Entidad
             entidad_cod = df_csv['Código de Cooperativa o Entidad'].iloc[0] if 'Código de Cooperativa o Entidad' in df_csv.columns else 96
 
             # Lectura TXT (Referencia para Cédulas)
@@ -117,7 +127,7 @@ if st.button("🚀 Procesar Auditoría Completa", use_container_width=True):
                         'Declarados en planilla': esperados,
                         'Encontrados': encontrados_doc,
                         'Cantidad faltante/adicional': esperados - encontrados_doc,
-                        'Nota': 'Comparación por cantidad de apariciones de la C.I.'
+                        'Nota': 'Comparación exclusiva por cantidad de apariciones de la C.I.; el número de operación se ignora.'
                     })
                 elif encontrados_doc > esperados:
                     doc_oblig_list.append({
@@ -129,7 +139,7 @@ if st.button("🚀 Procesar Auditoría Completa", use_container_width=True):
                         'Declarados en planilla': esperados,
                         'Encontrados': encontrados_doc,
                         'Cantidad faltante/adicional': encontrados_doc - esperados,
-                        'Nota': 'Comparación por cantidad de apariciones de la C.I.'
+                        'Nota': 'Comparación exclusiva por cantidad de apariciones de la C.I.; el número de operación se ignora.'
                     })
 
             df_faltantes_doc_oblig = pd.DataFrame(doc_oblig_list)
